@@ -1,65 +1,130 @@
+#
+# Copyright (C) 2017-2020 Yousong Zhou <yszhou4tech@gmail.com>
+#
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+#
+
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=shadowsocksr-libev
-PKG_VERSION:=2.5.3
-PKG_RELEASE:=1
+# Checklist when bumping versions
+#
+# - update cipher list by checking src/crypto.c:crypto_init()
+# - check if default mode has changed from being tcp_only
+#
+PKG_NAME:=shadowsocks-libev
+PKG_VERSION:=3.3.5
+PKG_RELEASE:=11
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://codeload.github.com/shadowsocksrr/shadowsocksr-libev/tar.gz/$(PKG_VERSION)?
-PKG_HASH:=3fc11a0a132aa6f229285f459e8ce391c20bf86b731b757b0de4dbc96c12301c
+PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-libev/releases/download/v$(PKG_VERSION)
+PKG_HASH:=cfc8eded35360f4b67e18dc447b0c00cddb29cc57a3cec48b135e5fb87433488
 
-PKG_LICENSE:=GPL-3.0
+PKG_MAINTAINER:=Yousong Zhou <yszhou4tech@gmail.com>
+
+PKG_LICENSE:=GPL-3.0-or-later
 PKG_LICENSE_FILES:=LICENSE
+PKG_CPE_ID:=cpe:/a:shadowsocks:shadowsocks-libev
 
 PKG_FIXUP:=autoreconf
-PKG_USE_MIPS16:=0
-PKG_BUILD_FLAGS:=no-mips16
-PKG_BUILD_PARALLEL:=1
 PKG_INSTALL:=1
+PKG_BUILD_FLAGS:=no-mips16 lto
+PKG_BUILD_PARALLEL:=1
+PKG_BUILD_DEPENDS:=c-ares pcre2
 
 include $(INCLUDE_DIR)/package.mk
 
-define Package/shadowsocksr-libev/Default
-  define Package/shadowsocksr-libev-ssr-$(1)
+
+define Package/shadowsocks-libev-config
+  SECTION:=net
+  CATEGORY:=Network
+  SUBMENU:=Web Servers/Proxies
+  TITLE:=shadowsocks-libev config scripts
+  URL:=https://github.com/shadowsocks/shadowsocks-libev
+endef
+
+define Package/shadowsocks-libev-config/conffiles
+/etc/config/shadowsocks-libev
+endef
+
+define Package/shadowsocks-libev-config/install
+	$(INSTALL_DIR) $(1)/etc/config
+	$(INSTALL_DATA) ./files/shadowsocks-libev.config $(1)/etc/config/shadowsocks-libev
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/shadowsocks-libev.init $(1)/etc/init.d/shadowsocks-libev
+endef
+
+
+define Package/shadowsocks-libev/Default
+  define Package/shadowsocks-libev-$(1)
     SECTION:=net
     CATEGORY:=Network
     SUBMENU:=Web Servers/Proxies
-    TITLE:=shadowsocksr-libev ssr-$(1)
-    URL:=https://github.com/shadowsocksrr/shadowsocksr-libev
-    DEPENDS:=+libev +libsodium +libopenssl +libpthread +libpcre +libudns +zlib +libopenssl-legacy
+    TITLE:=shadowsocks-libev $(1)
+    URL:=https://github.com/shadowsocks/shadowsocks-libev
+    DEPENDS:=+libev +libmbedtls +libpthread +libsodium +shadowsocks-libev-config $(DEPENDS_$(1))
   endef
 
-  define Package/shadowsocksr-libev-ssr-$(1)/install
+  define Package/shadowsocks-libev-$(1)/install
 	$$(INSTALL_DIR) $$(1)/usr/bin
-	$$(INSTALL_BIN) $$(PKG_INSTALL_DIR)/usr/bin/ss-$(1) $$(1)/usr/bin/ssr-$(1)
+	$$(INSTALL_BIN) $$(PKG_INSTALL_DIR)/usr/bin/$(1) $$(1)/usr/bin
   endef
+
 endef
 
-SHADOWSOCKSR_COMPONENTS:=check local nat redir server
-define shadowsocksr-libev/templates
-  $(foreach component,$(SHADOWSOCKSR_COMPONENTS),
-    $(call Package/shadowsocksr-libev/Default,$(component))
+DEPENDS_ss-local = +libpcre2
+DEPENDS_ss-server = +libcares +libpcre2
+
+SHADOWSOCKS_COMPONENTS:=ss-local ss-redir ss-tunnel ss-server
+define shadowsocks-libev/templates
+  $(foreach component,$(SHADOWSOCKS_COMPONENTS),
+    $(call Package/shadowsocks-libev/Default,$(component))
   )
 endef
-$(eval $(call shadowsocksr-libev/templates))
+$(eval $(call shadowsocks-libev/templates))
+
+
+define Package/shadowsocks-libev-ss-rules
+  SECTION:=net
+  CATEGORY:=Network
+  SUBMENU:=Web Servers/Proxies
+  TITLE:=shadowsocks-libev ss-rules
+  URL:=https://github.com/shadowsocks/shadowsocks-libev
+  DEPENDS:=+firewall4 \
+	   +ip \
+	   +resolveip \
+	   +ucode \
+	   +ucode-mod-fs \
+	   +shadowsocks-libev-ss-redir \
+	   +shadowsocks-libev-config \
+	   +kmod-nft-tproxy
+endef
+
+define Package/shadowsocks-libev-ss-rules/install
+	$(INSTALL_DIR) $(1)/usr/share/ss-rules
+	$(INSTALL_DATA) ./files/ss-rules/* $(1)/usr/share/ss-rules/
+endef
+
+define Build/Prepare
+	$(call Build/Prepare/Default)
+	$(FIND) $(PKG_BUILD_DIR) \
+			   -name '*.o' \
+			-o -name '*.lo' \
+			-o -name '.deps' \
+			-o -name '.libs' \
+		| $(XARGS) rm -rvf
+endef
 
 CONFIGURE_ARGS += \
 	--disable-documentation \
-	--disable-ssp \
+	--disable-silent-rules \
 	--disable-assert \
-	--enable-system-shared-lib
+	--disable-ssp \
 
-TARGET_CFLAGS += -flto
 TARGET_LDFLAGS += -Wl,--gc-sections,--as-needed
 
-ifeq ($(CONFIG_GCC_VERSION_12),y)
-	TARGET_CFLAGS += -Wno-error=use-after-free
-endif
-
-ifeq ($(CONFIG_GCC_VERSION_13),y)
-	TARGET_CFLAGS += -Wno-error=use-after-free
-endif
-
-$(foreach component,$(SHADOWSOCKSR_COMPONENTS), \
-  $(eval $(call BuildPackage,shadowsocksr-libev-ssr-$(component))) \
+$(eval $(call BuildPackage,shadowsocks-libev-config))
+$(eval $(call BuildPackage,shadowsocks-libev-ss-rules))
+$(foreach component,$(SHADOWSOCKS_COMPONENTS), \
+  $(eval $(call BuildPackage,shadowsocks-libev-$(component))) \
 )
